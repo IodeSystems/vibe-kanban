@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { WarningCircleIcon } from '@phosphor-icons/react/dist/ssr';
@@ -32,7 +32,14 @@ export function VirtualizedProcessLogs({
   const didInitScroll = useRef(false);
   const prevLogsLengthRef = useRef(0);
   const prevCurrentMatchRef = useRef<number | undefined>(undefined);
-  const [atBottom, setAtBottom] = useState(true);
+
+  // Native scroll to bottom - more reliable than virtualizer.scrollToIndex
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = parentRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    }
+  }, []);
 
   // Add keys and original index to log entries
   const logsWithKeys: LogEntryWithKey[] = logs.map((entry, index) => ({
@@ -49,23 +56,32 @@ export function VirtualizedProcessLogs({
   });
 
   // Check if user is at bottom of scroll
-  const checkAtBottom = useCallback(() => {
+  const isAtBottom = useCallback(() => {
     const el = parentRef.current;
-    if (!el) return;
+    if (!el) return true;
     const threshold = 50;
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setAtBottom(isAtBottom);
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
   }, []);
 
-  // Initial scroll to bottom
+  // Keep scroll position check for onScroll handler
+  const checkAtBottom = useCallback(() => {
+    // Just trigger the check - not stored in state anymore
+    isAtBottom();
+  }, [isAtBottom]);
+
+  // Initial scroll to bottom with retry mechanism
   useEffect(() => {
     if (!didInitScroll.current && logs.length > 0) {
       didInitScroll.current = true;
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
-      });
+      const doScroll = (attempts: number) => {
+        scrollToBottom('auto');
+        if (attempts > 0) {
+          setTimeout(() => doScroll(attempts - 1), 100);
+        }
+      };
+      setTimeout(() => doScroll(3), 50);
     }
-  }, [logs.length, virtualizer]);
+  }, [logs.length, scrollToBottom]);
 
   // Auto-scroll to bottom on new logs if user is at bottom
   useEffect(() => {
@@ -73,12 +89,15 @@ export function VirtualizedProcessLogs({
     const grewBy = logs.length - prev;
     prevLogsLengthRef.current = logs.length;
 
-    if (grewBy > 0 && atBottom && logs.length > 0) {
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
-      });
+    if (grewBy > 0 && logs.length > 0 && didInitScroll.current) {
+      // Check isAtBottom in real-time, not from stale state
+      setTimeout(() => {
+        if (isAtBottom()) {
+          scrollToBottom('smooth');
+        }
+      }, 50);
     }
-  }, [logs.length, atBottom, virtualizer]);
+  }, [logs.length, scrollToBottom, isAtBottom]);
 
   // Scroll to current match when it changes
   useEffect(() => {

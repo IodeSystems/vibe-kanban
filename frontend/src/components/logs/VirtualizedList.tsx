@@ -23,34 +23,26 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const [loading, setLoading] = useState(true);
   const { setEntries, reset } = useEntries();
   const parentRef = useRef<HTMLDivElement>(null);
-  const didInitScroll = useRef(false);
-  const prevEntriesLengthRef = useRef(0);
-  const [atBottom, setAtBottom] = useState(true);
-  const addTypeRef = useRef<AddEntryType>('initial');
 
   useEffect(() => {
     setLoading(true);
     setEntriesState([]);
-    didInitScroll.current = false;
-    prevEntriesLengthRef.current = 0;
     reset();
   }, [attempt.id, reset]);
 
   const onEntriesUpdated = useCallback(
     (
       newEntries: PatchTypeWithKey[],
-      addType: AddEntryType,
+      _addType: AddEntryType,
       newLoading: boolean
     ) => {
-      addTypeRef.current = addType;
       setEntriesState(newEntries);
       setEntries(newEntries);
-
-      if (loading) {
-        setLoading(newLoading);
+      if (newLoading === false) {
+        setLoading(false);
       }
     },
-    [setEntries, loading]
+    [setEntries]
   );
 
   useConversationHistory({ attempt, onEntriesUpdated });
@@ -58,53 +50,45 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 100, // Estimate for conversation entries (they vary in size)
+    estimateSize: () => 100,
     overscan: 5,
   });
 
-  // Check if user is at bottom of scroll
-  const checkAtBottom = useCallback(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    const threshold = 100;
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setAtBottom(isAtBottom);
-  }, []);
-
-  // Initial scroll to bottom once data appears
+  // Scroll to last item whenever entries change
   useEffect(() => {
-    if (!didInitScroll.current && entries.length > 0 && !loading) {
-      didInitScroll.current = true;
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
-      });
-    }
-  }, [entries.length, loading, virtualizer]);
+    if (entries.length === 0) return;
 
-  // Auto-scroll on new entries if at bottom
-  useEffect(() => {
-    const prev = prevEntriesLengthRef.current;
-    const grewBy = entries.length - prev;
-    prevEntriesLengthRef.current = entries.length;
+    const scrollToEnd = () => {
+      virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
+    };
 
-    if (grewBy > 0 && atBottom && entries.length > 0 && didInitScroll.current) {
-      const addType = addTypeRef.current;
-      if (addType === 'running' || addType === 'plan') {
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
-        });
+    scrollToEnd();
+
+    let elapsed = 0;
+    const interval = setInterval(() => {
+      elapsed += 50;
+      const el = parentRef.current;
+      const atBottom = el
+        ? el.scrollHeight - el.scrollTop - el.clientHeight < 50
+        : false;
+
+      if (atBottom || elapsed >= 500) {
+        clearInterval(interval);
+      } else {
+        scrollToEnd();
       }
-    }
-  }, [entries.length, atBottom, virtualizer]);
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, [entries.length, virtualizer]);
 
   return (
     <ApprovalFormProvider>
       <div
         ref={parentRef}
         className="flex-1 h-full overflow-auto"
-        onScroll={checkAtBottom}
       >
-        <div className="h-2" /> {/* Header spacer */}
+        <div className="h-2" />
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
@@ -114,6 +98,7 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const data = entries[virtualRow.index];
+            if (!data) return null;
 
             if (data.type === 'STDOUT') {
               return (
@@ -179,7 +164,7 @@ const VirtualizedList = ({ attempt, task }: VirtualizedListProps) => {
             return null;
           })}
         </div>
-        <div className="h-2" /> {/* Footer spacer */}
+        <div className="h-2" />
       </div>
       {loading && (
         <div className="float-left top-0 left-0 w-full h-full bg-primary flex flex-col gap-2 justify-center items-center">

@@ -21,22 +21,11 @@ export function ConversationList({ attempt }: ConversationListProps) {
   const [loading, setLoading] = useState(true);
   const { setEntries, reset } = useEntries();
   const parentRef = useRef<HTMLDivElement>(null);
-  const didInitScroll = useRef(false);
-  const prevEntriesLengthRef = useRef(0);
-  const [atBottom, setAtBottom] = useState(true);
-  const addTypeRef = useRef<AddEntryType>('initial');
-  const pendingUpdateRef = useRef<{
-    entries: PatchTypeWithKey[];
-    addType: AddEntryType;
-    loading: boolean;
-  } | null>(null);
   const debounceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setLoading(true);
     setEntriesState([]);
-    didInitScroll.current = false;
-    prevEntriesLengthRef.current = 0;
     reset();
   }, [attempt.id, reset]);
 
@@ -51,33 +40,22 @@ export function ConversationList({ attempt }: ConversationListProps) {
   const onEntriesUpdated = useCallback(
     (
       newEntries: PatchTypeWithKey[],
-      addType: AddEntryType,
+      _addType: AddEntryType,
       newLoading: boolean
     ) => {
-      pendingUpdateRef.current = {
-        entries: newEntries,
-        addType,
-        loading: newLoading,
-      };
-
       if (debounceTimeoutRef.current) {
         clearTimeout(debounceTimeoutRef.current);
       }
 
       debounceTimeoutRef.current = setTimeout(() => {
-        const pending = pendingUpdateRef.current;
-        if (!pending) return;
-
-        addTypeRef.current = pending.addType;
-        setEntriesState(pending.entries);
-        setEntries(pending.entries);
-
-        if (loading) {
-          setLoading(pending.loading);
+        setEntriesState(newEntries);
+        setEntries(newEntries);
+        if (newLoading === false) {
+          setLoading(false);
         }
       }, 100);
     },
-    [setEntries, loading]
+    [setEntries]
   );
 
   useConversationHistory({ attempt, onEntriesUpdated });
@@ -85,54 +63,42 @@ export function ConversationList({ attempt }: ConversationListProps) {
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 100, // Estimate for conversation entries
+    estimateSize: () => 100,
     overscan: 5,
   });
 
-  // Check if user is at bottom of scroll
-  const checkAtBottom = useCallback(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    const threshold = 100;
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setAtBottom(isAtBottom);
-  }, []);
-
-  // Initial scroll to bottom once data appears
-  useEffect(() => {
-    if (!didInitScroll.current && entries.length > 0 && !loading) {
-      didInitScroll.current = true;
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
-      });
-    }
-  }, [entries.length, loading, virtualizer]);
-
-  // Auto-scroll on new entries based on add type
-  useEffect(() => {
-    const prev = prevEntriesLengthRef.current;
-    const grewBy = entries.length - prev;
-    prevEntriesLengthRef.current = entries.length;
-
-    if (grewBy > 0 && entries.length > 0 && didInitScroll.current) {
-      const addType = addTypeRef.current;
-
-      if (addType === 'plan' && !loading) {
-        // For plan updates, scroll to top of last item
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(entries.length - 1, { align: 'start' });
-        });
-      } else if (addType === 'running' && !loading && atBottom) {
-        // For running updates, auto-scroll to bottom if user is at bottom
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
-        });
-      }
-    }
-  }, [entries.length, atBottom, loading, virtualizer]);
-
   // Determine if content is ready to show (has data or finished loading)
   const hasContent = !loading || entries.length > 0;
+
+  // Scroll to last item whenever entries change
+  useEffect(() => {
+    if (entries.length === 0) return;
+
+    const scrollToEnd = () => {
+      virtualizer.scrollToIndex(entries.length - 1, { align: 'end' });
+    };
+
+    // Immediate scroll
+    scrollToEnd();
+
+    // Keep trying every 50ms for up to 500ms until we're at the bottom
+    let elapsed = 0;
+    const interval = setInterval(() => {
+      elapsed += 50;
+      const el = parentRef.current;
+      const atBottom = el
+        ? el.scrollHeight - el.scrollTop - el.clientHeight < 50
+        : false;
+
+      if (atBottom || elapsed >= 500) {
+        clearInterval(interval);
+      } else {
+        scrollToEnd();
+      }
+    }, 50);
+
+    return () => clearInterval(interval);
+  }, [entries.length, virtualizer]);
 
   return (
     <ApprovalFormProvider>
@@ -145,9 +111,8 @@ export function ConversationList({ attempt }: ConversationListProps) {
         <div
           ref={parentRef}
           className="h-full overflow-auto scrollbar-none"
-          onScroll={checkAtBottom}
         >
-          <div className="h-2" /> {/* Header spacer */}
+          <div className="h-2" />
           <div
             style={{
               height: `${virtualizer.getTotalSize()}px`,
@@ -157,6 +122,7 @@ export function ConversationList({ attempt }: ConversationListProps) {
           >
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const data = entries[virtualRow.index];
+              if (!data) return null;
 
               if (data.type === 'STDOUT') {
                 return (
@@ -221,7 +187,7 @@ export function ConversationList({ attempt }: ConversationListProps) {
               return null;
             })}
           </div>
-          <div className="h-2" /> {/* Footer spacer */}
+          <div className="h-2" />
         </div>
       </div>
     </ApprovalFormProvider>

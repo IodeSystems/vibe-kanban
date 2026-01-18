@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { AlertCircle } from 'lucide-react';
 import { useLogStream } from '@/hooks/useLogStream';
@@ -21,7 +21,14 @@ export function ProcessLogsViewerContent({
   const parentRef = useRef<HTMLDivElement>(null);
   const didInitScroll = useRef(false);
   const prevLenRef = useRef(0);
-  const [atBottom, setAtBottom] = useState(true);
+
+  // Native scroll to bottom - more reliable than virtualizer.scrollToIndex
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const el = parentRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    }
+  }, []);
 
   const virtualizer = useVirtualizer({
     count: logs.length,
@@ -31,23 +38,32 @@ export function ProcessLogsViewerContent({
   });
 
   // Check if user is at bottom of scroll
-  const checkAtBottom = useCallback(() => {
+  const isAtBottom = useCallback(() => {
     const el = parentRef.current;
-    if (!el) return;
-    const threshold = 50; // pixels from bottom to consider "at bottom"
-    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setAtBottom(isAtBottom);
+    if (!el) return true;
+    const threshold = 50;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
   }, []);
+
+  // Keep scroll position check for onScroll handler
+  const checkAtBottom = useCallback(() => {
+    // Just trigger the check - not stored in state anymore
+    isAtBottom();
+  }, [isAtBottom]);
 
   // 1) Initial jump to bottom once data appears.
   useEffect(() => {
     if (!didInitScroll.current && logs.length > 0) {
       didInitScroll.current = true;
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
-      });
+      const doScroll = (attempts: number) => {
+        scrollToBottom('auto');
+        if (attempts > 0) {
+          setTimeout(() => doScroll(attempts - 1), 100);
+        }
+      };
+      setTimeout(() => doScroll(3), 50);
     }
-  }, [logs.length, virtualizer]);
+  }, [logs.length, scrollToBottom]);
 
   // 2) If there's new logs and we're at bottom, scroll to bottom
   useEffect(() => {
@@ -55,12 +71,14 @@ export function ProcessLogsViewerContent({
     const grewBy = logs.length - prev;
     prevLenRef.current = logs.length;
 
-    if (grewBy > 0 && atBottom && logs.length > 0) {
-      requestAnimationFrame(() => {
-        virtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
-      });
+    if (grewBy > 0 && logs.length > 0 && didInitScroll.current) {
+      setTimeout(() => {
+        if (isAtBottom()) {
+          scrollToBottom('smooth');
+        }
+      }, 50);
     }
-  }, [logs.length, atBottom, virtualizer]);
+  }, [logs.length, scrollToBottom, isAtBottom]);
 
   const formatLogLine = (entry: LogEntry, index: number) => {
     return (
