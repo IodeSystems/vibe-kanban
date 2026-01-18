@@ -174,7 +174,10 @@ impl ClaudeCode {
 #[async_trait]
 impl StandardCodingAgentExecutor for ClaudeCode {
     fn use_approvals(&mut self, approvals: Arc<dyn ExecutorApprovalService>) {
-        self.approvals_service = Some(approvals);
+        // Only enable approval service if plan or approvals mode is configured
+        if self.plan.unwrap_or(false) || self.approvals.unwrap_or(false) {
+            self.approvals_service = Some(approvals);
+        }
     }
 
     async fn spawn(
